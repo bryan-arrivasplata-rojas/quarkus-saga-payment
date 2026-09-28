@@ -1,8 +1,13 @@
 # Reactive Distributed SAGA Orchestrator with Quarkus & Mutiny
 
-Sistema distribuido de orquestación de transferencias monetarias de alta concurrencia basado en el Patrón SAGA Orquestado, implementado con Quarkus 3.39.5, SmallRye Mutiny (programación reactiva no bloqueante) y PostgreSQL / H2.
+Este proyecto es una plataforma bancaria distribuida que gestiona transferencias de dinero entre cuentas usando microservicios desacoplados. Cuando un usuario solicita mover saldo de una cuenta A a una cuenta B, el sistema no bloquea las bases de datos de forma tradicional; en su lugar, utiliza un Orquestador SAGA Reactivo que coordina 3 pasos secuenciales:
 
-El sistema garantiza consistencia eventual y atomicidad distribuida entre microservicios autónomos mediante transacciones compensatorias en orden inverso (LIFO - Last In, First Out), evitando bloqueos pesados de base de datos distribuidos (2PC) y manteniendo el Event Loop de Vert.x completamente libre de operaciones bloqueantes.
+1. Débito: Retira el dinero de la cuenta de origen.
+2. Crédito: Deposita el dinero en la cuenta de destino.
+3. Comprobante: Emite una notificación digital de la operación.
+
+¿Qué sucede si algo falla? (Rollback LIFO):
+Si el servicio de notificaciones se cae o rechaza la emisión, el sistema ejecuta una compensación automática e inmediata en orden inverso: revierte primero el abono en la cuenta de destino y luego restaura el dinero en la cuenta de origen. De este modo, el sistema garantiza consistencia contable exacta sin dejar saldos colgados ni inconsistencias entre servicios.
 
 ---
 
@@ -39,28 +44,28 @@ El sistema implementa una arquitectura orientada a microservicios desacoplados d
 ### Patrones Clave Implementados
 * Saga Pattern (Orchestration): El orquestador es el único punto de control que conoce la secuencia de ejecución (Execute) y la secuencia de compensación (Compensate).
 * LIFO Compensation: Si el Paso 3 (Notificación) falla, el orquestador compensa primero el Paso 2 (revierte crédito) y finalmente el Paso 1 (revierte débito).
-* Reactive Worker Offloading: Las lecturas y escrituras JPA/Panache bloqueantes hacia la base de datos se ejecutan fuera del Event Loop de Vert.x usando explícitamente runSubscriptionOn(Infrastructure.getDefaultWorkerPool()).
-* State Machine & Idempotency: Cada transacción se persiste en estado PENDING, transicionando atómicamente a COMPLETED o COMPENSATED con su traza de auditoría.
+* Reactive Worker Offloading: Las lecturas y escrituras JPA/Panache hacia la base de datos se delegan al pool de workers mediante runSubscriptionOn(Infrastructure.getDefaultWorkerPool()) para no bloquear el Event Loop de Vert.x.
+* State Machine & Idempotency: Cada transacción se persiste en estado PENDING, transicionando atómicamente a COMPLETED o COMPENSATED con su correspondiente registro de auditoría.
 
 ---
 
 ## 2. Tecnologías y Versiones
 
-* Lenguaje: Java 21 LTS (compatible con Java 25)
+* Lenguaje: Java 25 (OpenJDK / Oracle GraalVM compatible)
 * Framework: Quarkus 3.39.5
 * Librería Reactiva: SmallRye Mutiny
-* ORM: Hibernate ORM con Panache (JPA)
+* ORM & Persistencia: Hibernate ORM con Panache (JPA)
 * Bases de Datos:
-  * Producción / Desarrollo: PostgreSQL Serverless (Neon Cloud)
-  * Pruebas Unitarias / CI: H2 Database en memoria (%test)
-* Especificación API: SmallRye OpenAPI 3.1 & Swagger UI
-* Herramientas de Testing: JUnit 5, Mockito (con @InjectMock), REST-Assured y Bruno CLI
+  * Producción / Desarrollo: PostgreSQL Serverless en la nube (Neon Cloud)
+  * Pruebas Unitarias / CI: Base de datos H2 en memoria (%test)
+* Documentación de APIs: SmallRye OpenAPI 3.1 y Swagger UI
+* Herramientas de Validación: JUnit 5, Mockito, REST-Assured y Bruno CLI
 
 ---
 
 ## 3. Microservicios y Componentes
 
-| Microservicio | Puerto | Base de Datos | Rol en la SAGA |
+| Microservicio | Puerto Local | Base de Datos | Rol en la Arquitectura |
 |---|---|---|---|
 | saga-orchestrator | 8080 | PostgreSQL (saga_db) | Orquestador central, auditoría, compensación y streaming SSE. |
 | account-service | 8081 | PostgreSQL (account_db) | Débito de saldos y reversa de débitos en cuenta origen. |
@@ -71,69 +76,91 @@ El sistema implementa una arquitectura orientada a microservicios desacoplados d
 
 ## 4. Configuración de Base de Datos y Credenciales
 
-### Entornos y Perfiles
-* Producción / Dev: Utiliza PostgreSQL hosteado en Neon. Requiere las variables de entorno inyectadas en tiempo de ejecución.
-* Test (%test): Configurado en application.properties con jdbc:h2:mem:orchestrator_test;DB_CLOSE_DELAY=-1 y generación drop-and-create, permitiendo tests independientes sin dependencias de red.
+### Entornos y Perfiles de Base de Datos
+* Perfil de Pruebas (%test):
+  Configurado en application.properties con jdbc:h2:mem:orchestrator_test;DB_CLOSE_DELAY=-1 y estrategia drop-and-create. Permite que las pruebas unitarias y de integración en CI se ejecuten de forma aislada y veloz sin requerir red externa ni credenciales reales.
+* Perfil de Producción / Desarrollo (prod, dev):
+  Se conecta a un clúster serverless de PostgreSQL provisto por Neon Cloud utilizando canales cifrados con TLS (sslmode=require).
 
-### Variables de Entorno Requeridas
-Nunca se versionan contraseñas en Git. Los servicios leen estas variables del sistema operativo o del archivo .env local:
+### Ubicación y Gestión de Credenciales
+Por estándares de seguridad, ninguna credencial se guarda en el código fuente. Se inyectan mediante variables de entorno en el sistema o mediante un archivo .env en la raíz (ignorado por Git):
 
-export DB_JDBC_URL="jdbc:postgresql://<neon-host>.neon.tech/<database>?sslmode=require"
-export DB_USERNAME="<usuario_db>"
-export DB_PASSWORD="<contraseña_db>"
+* Variable de URL de conexión:
+  DB_JDBC_URL=jdbc:postgresql://<neon-subdomain>.neon.tech/<database>?sslmode=require
+* Variable de Usuario:
+  DB_USERNAME=<usuario_neon>
+* Variable de Contraseña:
+  DB_PASSWORD=<password_neon>
 
 ---
 
 ## 5. Endpoints y Catálogo de APIs
 
-### Swagger UI
-Disponible en el orquestador mientras esté en ejecución:
-* URL: http://localhost:8080/q/swagger-ui/ (o vía URL de Codespaces con puerto 8080)
-* OpenAPI Spec: http://localhost:8080/q/openapi
+### Swagger UI y Documentación Interactiva
+La documentación interactiva OpenAPI/Swagger se encuentra activa en el microservicio orquestador (8080):
 
-### Rutas Principales (saga-orchestrator)
+* URL en GitHub Codespaces:
+  https://crispy-guacamole-9g655v7rpx9hx775-8080.app.github.dev/q/swagger-ui
+* URL en Localhost:
+  http://localhost:8080/q/swagger-ui
+* Especificación OpenAPI (JSON):
+  https://crispy-guacamole-9g655v7rpx9hx775-8080.app.github.dev/q/openapi
 
-1. Ejecutar Transferencia (Orquestación SAGA)
-* Método / URL: POST /api/transfers
-* Headers: Content-Type: application/json
-* Body (Happy Path):
+### Catálogo de Rutas (saga-orchestrator)
+
+1. Transferencia Exitosa (Happy Path)
+* Método y Ruta: POST /api/transfers
+* Header: Content-Type: application/json
+* Payload de Solicitud:
   {
     "fromAccountId": 1,
     "toAccountId": 2,
-    "amount": 75.00,
+    "amount": 50.00,
     "simulateNotificationFailure": false
   }
-* Respuesta Exitosa (200 OK):
+* Respuesta Esperada (200 OK):
   {
     "sagaId": "219f8c8f-36e3-423b-8f61-30774743f10d",
     "status": "SUCCESS",
     "message": "Transferencia completada exitosamente bajo orquestación SAGA."
   }
-* Body (Prueba de Rollback LIFO):
+
+2. Transferencia con Falla y Compensación (Rollback LIFO)
+* Método y Ruta: POST /api/transfers
+* Header: Content-Type: application/json
+* Payload de Solicitud:
   {
     "fromAccountId": 1,
     "toAccountId": 2,
-    "amount": 75.00,
+    "amount": 50.00,
     "simulateNotificationFailure": true
   }
-* Respuesta con Compensación (409 Conflict):
+* Respuesta Esperada (409 Conflict):
   {
     "sagaId": "219f8c8f-36e3-423b-8f61-30774743f10d",
     "status": "FAILED_AND_COMPENSATED",
     "message": "Fallo reactivo. La compensación SAGA restauró saldos y comprobantes vía HTTP (Reactivo Uni)."
   }
 
-2. Consultas y Auditoría
-* GET /api/accounts: Consulta de saldos delegada vía HTTP hacia account-service.
-* GET /api/sagas: Historial de transacciones y estados finales (COMPLETED, COMPENSATED).
-* GET /api/audits: Trazabilidad detallada de cada paso y compensación ejecutada.
-* GET /api/transfers/stream: Flujo en vivo de eventos reactivos vía Server-Sent Events (Multi<String>).
+3. Consultas de Estado y Auditoría
+* Consultar Cuentas Consolidadas:
+  GET /api/accounts
+  Consulta a través del orquestador el estado y saldo de todas las cuentas delegando la petición a account-service.
+* Consultar Historial de Transacciones SAGA:
+  GET /api/sagas
+  Lista todas las sagas procesadas, sus identificadores UUID, estados finales (COMPLETED o COMPENSATED) y mensajes de error si los hubo.
+* Consultar Trazabilidad y Auditoría:
+  GET /api/audits
+  Muestra el log cronológico de cada paso ejecutado (DEBITED, CREDITED, RECEIPT_ISSUED) y los pasos de compensación revertidos.
+* Streaming de Eventos Reactivos (SSE):
+  GET /api/transfers/stream
+  Transmite en tiempo real eventos de transferencias mediante Server-Sent Events con Multi<String>.
 
 ---
 
-## 6. Pruebas de API con Bruno
+## 6. Pruebas Automatizadas de API con Bruno
 
-La carpeta bruno-collection/ contiene la colección de pruebas versionada.
+La carpeta bruno-collection/ contiene todas las pruebas parametrizadas para validar el comportamiento del clúster.
 
 ### Estructura de la Colección
 bruno-collection/
@@ -143,75 +170,82 @@ bruno-collection/
 │   ├── Localhost.bru
 │   └── Codespaces.bru
 ├── 01-Saga-Orchestrator/
+│   ├── 01-Execute-Transfer-Success.bru
+│   ├── 02-Execute-Transfer-Failure-Compensation.bru
+│   ├── 03-List-Accounts.bru
+│   ├── 04-List-Sagas-History.bru
+│   ├── 05-List-Audits.bru
+│   └── 06-Stream-Saga-Events-SSE.bru
 └── 02-Direct-Microservices-Testing/
+    ├── Account-Service/
+    ├── Payment-Service/
+    └── Notification-Service/
 
-### Cómo ejecutar la colección
-1. Abre Bruno y selecciona Open Collection.
-2. Selecciona la carpeta bruno-collection/ de este proyecto.
-3. Elige el entorno:
-   * Localhost: Si ejecutas los servicios en tu máquina local.
-   * Codespaces: Si ejecutas sobre GitHub Codespaces. Configura tu token personal en Environments -> Configure para túneles protegidos.
+### Instrucciones de Uso en Bruno
+1. Abre la aplicación de escritorio de Bruno.
+2. Haz clic en Open Collection y selecciona la carpeta bruno-collection/ del repositorio.
+3. En la esquina superior derecha, selecciona el entorno:
+   * Codespaces: Apunta a las URLs públicas generadas por GitHub (https://crispy-guacamole-...app.github.dev).
+   * Localhost: Apunta a las direcciones locales directas (http://localhost:8080, etc.).
 
 ---
 
 ## 7. Pipeline de CI/CD (GitHub Actions)
 
-El repositorio cuenta con un pipeline completamente automatizado en .github/workflows/ci-cd.yml que se ejecuta en cada push o pull_request a la rama main.
+El archivo .github/workflows/ci-cd.yml automatiza la integración continua y el despliegue efímero en cada push o pull_request a la rama main.
 
-           [ git push origin main ]
-                      │
-                      ▼
-   ┌─────────────────────────────────────┐
-   │        FASE CI (Continuous Int.)    │
-   │ - Setup Java 21 Temurin             │
-   │ - Ejecución mvn test (4 servicios)  │
-   │ - Empaquetado Fast-JAR de apps      │
-   │ - Generación de Artefactos          │
-   └──────────────────┬──────────────────┘
-                      │ (Solo si CI pasa 100%)
-                      ▼
-   ┌─────────────────────────────────────┐
-   │        FASE CD (Continuous Dep.)    │
-   │ - Descarga de binarios Fast-JAR     │
-   │ - Despliegue en vivo en background  │
-   │ - Health Check de puertos y APIs    │
-   │ - Entorno Activo durante 5 minutos  │
-   │ - Apagado controlado de servicios   │
-   └─────────────────────────────────────┘
+                    [ git push origin main ]
+                               │
+                               ▼
+        ┌─────────────────────────────────────────────┐
+        │        ETAPA 1: Integración Continua (CI)   │
+        │ - Configuración de entorno Java 25          │
+        │ - Ejecución de pruebas unitarias (mvn test) │
+        │ - Empaquetado Fast-JAR de la aplicación     │
+        └──────────────────────┬──────────────────────┘
+                               │ (Aprobado sin errores)
+                               ▼
+        ┌─────────────────────────────────────────────┐
+        │        ETAPA 2: Despliegue Continuo (CD)    │
+        │ - Localización y arranque de quarkus-run.jar│
+        │ - Verificación de Health Check (/q/openapi) │
+        │ - Entorno activo durante 5 minutos (300s)   │
+        │ - Apagado controlado automático del runner  │
+        └─────────────────────────────────────────────┘
 
-### ¿Qué sucede exactamente en cada Push?
-1. Validación Estricta: Se compilan y corren todas las pruebas unitarias y de integración reactivas de los cuatro módulos (account-service, payment-service, notification-service, saga-orchestrator). Si algún test falla, el pipeline aborta la ejecución inmediatamente.
-2. Generación de Binarios: Si los tests son exitosos, se construyen los ejecutables Fast-JAR optimizados de Quarkus.
-3. Despliegue Efímero: El Job de CD levanta los cuatro servicios en puertos dedicados (8080, 8081, 8082, 8083), verifica que respondan a los health checks y los mantiene activos durante 5 minutos continuos (300 segundos) para permitir validaciones de humo o pruebas automatizadas de integración.
-4. Apagado y Limpieza Automática: Transcurridos los 5 minutos, el pipeline envía señales de terminación a los procesos Java y destruye el entorno efímero de forma limpia.
+### Comportamiento del Pipeline ante un Push
+1. Validación Automática de Tests: Al subir cambios, GitHub Actions descarga el JDK 25 y corre la suite completa de pruebas unitarias. Si una sola aserción falla, el pipeline se detiene inmediatamente con código de error, previniendo despliegues rotos.
+2. Construcción del Binario: Si los tests son satisfactorios, genera el paquete de ejecución optimizado en target/quarkus-app/quarkus-run.jar.
+3. Despliegue Efímero de 5 Minutos: El runner arranca la aplicación en background, valida la conectividad en el puerto 8080 y mantiene los servicios encendidos exactamente 5 minutos (300 segundos) para permitir verificaciones en vivo o smoke tests.
+4. Terminación y Limpieza: Cumplido el tiempo, el runner envía una señal de apagado ordenado (kill) a los procesos Java y libera los recursos de cómputo automáticamente.
 
 ---
 
-## 8. Guía de Ejecución Local
+## 8. Guía de Ejecución en Entorno Local
 
 ### Prerrequisitos
-* Java 21 o superior
-* Git
+* Java 25 (o Java 21 configurando el compilador correspondiente)
+* Git instalado
 
-### Pasos para levantar la plataforma completa
+### Puesta en Marcha de los Microservicios
+Para probar el flujo distribuido de forma local, abre cuatro pestañas de terminal y ejecuta los comandos correspondientes:
 
-Abre cuatro terminales independientes y ejecuta en cada una:
-
-# Terminal 1 - Microservicio de Cuentas
+# Terminal 1: Account Service (Puerto 8081)
 cd account-service
 ./mvnw quarkus:dev
 
-# Terminal 2 - Microservicio de Pagos
+# Terminal 2: Payment Service (Puerto 8082)
 cd payment-service
 ./mvnw quarkus:dev
 
-# Terminal 3 - Microservicio de Notificaciones
+# Terminal 3: Notification Service (Puerto 8083)
 cd notification-service
 ./mvnw quarkus:dev
 
-# Terminal 4 - Orquestador SAGA
+# Terminal 4: Saga Orchestrator (Puerto 8080)
 cd saga-orchestrator
 ./mvnw quarkus:dev
 
-### Ejecutar la suite de pruebas unitarias
-./mvnw test -f saga-orchestrator/pom.xml
+### Ejecución de Pruebas Unitarias
+Para correr la suite de pruebas unitarias localmente:
+./mvnw test

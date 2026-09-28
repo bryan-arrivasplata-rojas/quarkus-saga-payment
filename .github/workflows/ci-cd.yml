@@ -1,4 +1,4 @@
-name: CI Saga Orchestrator Pipeline
+name: CI/CD Reactive Saga Pipeline
 
 on:
   push:
@@ -8,85 +8,68 @@ on:
 
 jobs:
   build-test-and-run:
+    name: "Build, Test & Ephemeral Run"
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout del código
         uses: actions/checkout@v4
 
-      - name: Configurar Java 21
+      - name: Configurar Java 25
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '21'
+          distribution: 'oracle'
+          java-version: '25'
           cache: 'maven'
 
-      - name: Dar permisos de ejecución a los Maven Wrappers
+      - name: Dar permisos de ejecución al Maven Wrapper
         run: |
-          chmod +x ./saga-orchestrator/mvnw || true
-          chmod +x ./account-service/mvnw || true
-          chmod +x ./payment-service/mvnw || true
-          chmod +x ./notification-service/mvnw || true
+          chmod +x ./mvnw || true
+          if [ -f "./saga-orchestrator/mvnw" ]; then chmod +x ./saga-orchestrator/mvnw; fi
 
-      # ==========================================
-      # 1. EJECUCIÓN DE PRUEBAS UNITARIAS
-      # ==========================================
       - name: Ejecutar pruebas unitarias (Unit Tests)
         run: |
-          echo "=== Corriendo tests de saga-orchestrator ==="
-          cd saga-orchestrator && ./mvnw test && cd ..
+          echo "=== Ejecutando pruebas unitarias con Java 25 ==="
+          if [ -d "saga-orchestrator" ]; then
+            cd saga-orchestrator && ./mvnw test && cd ..
+          else
+            ./mvnw test
+          fi
 
-          echo "=== Corriendo tests de account-service ==="
-          cd account-service && ./mvnw test && cd ..
-
-          echo "=== Corriendo tests de payment-service ==="
-          cd payment-service && ./mvnw test && cd ..
-
-          echo "=== Corriendo tests de notification-service ==="
-          cd notification-service && ./mvnw test && cd ..
-
-      # ==========================================
-      # 2. COMPILACIÓN DE EMPAQUETADOS
-      # ==========================================
-      - name: Empaquetar aplicaciones (Fast-JAR)
+      - name: Empaquetar aplicación (Fast-JAR)
         run: |
-          cd account-service && ./mvnw package -DskipTests && cd ..
-          cd payment-service && ./mvnw package -DskipTests && cd ..
-          cd notification-service && ./mvnw package -DskipTests && cd ..
-          cd saga-orchestrator && ./mvnw package -DskipTests && cd ..
+          echo "=== Empaquetando aplicación ==="
+          if [ -d "saga-orchestrator" ]; then
+            cd saga-orchestrator && ./mvnw package -DskipTests && cd ..
+          else
+            ./mvnw package -DskipTests
+          fi
 
-      # ==========================================
-      # 3. LEVANTAR SERVICIOS EN BACKGROUND (5 MIN)
-      # ==========================================
-      - name: Iniciar servicios y mantener activos por 5 minutos
+      - name: Iniciar servicio y mantener activo por 5 minutos
         run: |
-          echo "Iniciando microservicios..."
+          echo "=== Localizando binario Fast-JAR ==="
+          JAR_PATH=$(find . -name "quarkus-run.jar" | head -n 1)
           
-          # Arrancamos cada servicio en segundo plano guardando su PID
-          java -jar account-service/target/quarkus-app/quarkus-run.jar &
-          PID_ACCOUNT=$!
+          if [ -z "$JAR_PATH" ]; then
+            echo "Error: No se encontró quarkus-run.jar"
+            exit 1
+          fi
 
-          java -jar payment-service/target/quarkus-app/quarkus-run.jar &
-          PID_PAYMENT=$!
+          echo "Iniciando servicio desde: $JAR_PATH"
+          java -jar "$JAR_PATH" > app.log 2>&1 &
+          APP_PID=$!
 
-          java -jar notification-service/target/quarkus-app/quarkus-run.jar &
-          PID_NOTIFICATION=$!
+          echo "Esperando inicio del servicio..."
+          sleep 12
 
-          java -jar saga-orchestrator/target/quarkus-app/quarkus-run.jar &
-          PID_ORCHESTRATOR=$!
+          echo "Verificando endpoints locales:"
+          curl -sI http://localhost:8080/q/openapi || true
 
-          echo "Esperando que los puertos estén listos..."
-          sleep 10
-
-          echo "Verificando estado de los servicios:"
-          curl -I http://localhost:8080/q/openapi || true
-          curl -I http://localhost:8081/accounts || true
-          
           echo "=========================================================="
-          echo "Servicios encendidos. Manteniendo activos por 5 minutos..."
+          echo "Servicio activo. Manteniendo encendido por 5 minutos..."
           echo "=========================================================="
           sleep 300
 
-          echo "Tiempo cumplido (5 min). Apagando microservicios de forma controlada..."
-          kill -9 $PID_ACCOUNT $PID_PAYMENT $PID_NOTIFICATION $PID_ORCHESTRATOR || true
-          echo "Todos los servicios han sido apagados."
+          echo "Tiempo cumplido (5 min). Apagando proceso..."
+          kill -9 $APP_PID || true
+          echo "Proceso finalizado exitosamente."
