@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-test-and-run:
-    name: "Build, Test & Ephemeral Public Run"
+    name: "Build, Test & Ephemeral Full Cluster Deployment"
     runs-on: ubuntu-latest
 
     steps:
@@ -22,50 +22,112 @@ jobs:
           java-version: '25'
           cache: 'maven'
 
-      - name: Dar permisos de ejecución al Maven Wrapper
+      - name: Asignar permisos de ejecución a Maven Wrappers
         run: |
           chmod +x ./mvnw || true
-          if [ -f "./saga-orchestrator/mvnw" ]; then chmod +x ./saga-orchestrator/mvnw; fi
+          for s in saga-orchestrator account-service payment-service notification-service; do
+            if [ -f "./$s/mvnw" ]; then chmod +x ./$s/mvnw; fi
+          done
 
-      - name: Ejecutar pruebas unitarias (Unit Tests con H2 aislado)
+      - name: Ejecutar pruebas unitarias (Unit Tests)
         run: |
-          echo "=== Ejecutando pruebas unitarias ==="
+          echo "=== 1. Ejecutando tests unitarios ==="
           if [ -d "saga-orchestrator" ]; then
             cd saga-orchestrator && ./mvnw test && cd ..
           else
             ./mvnw test
           fi
 
-      - name: Empaquetar aplicación (Fast-JAR) con Swagger habilitado
+      - name: Empaquetar los 4 microservicios (Fast-JAR)
         run: |
-          echo "=== Empaquetando aplicación ==="
+          echo "=== 2. Compilando y empaquetando cluster completo ==="
+          
+          # Compilar saga-orchestrator
           if [ -d "saga-orchestrator" ]; then
+            echo "Empaquetando saga-orchestrator..."
             cd saga-orchestrator && ./mvnw package -DskipTests -Dquarkus.swagger-ui.always-include=true && cd ..
           else
             ./mvnw package -DskipTests -Dquarkus.swagger-ui.always-include=true
           fi
 
+          # Compilar account-service
+          if [ -d "account-service" ]; then
+            echo "Empaquetando account-service..."
+            cd account-service && ./mvnw package -DskipTests && cd ..
+          fi
+
+          # Compilar payment-service
+          if [ -d "payment-service" ]; then
+            echo "Empaquetando payment-service..."
+            cd payment-service && ./mvnw package -DskipTests && cd ..
+          fi
+
+          # Compilar notification-service
+          if [ -d "notification-service" ]; then
+            echo "Empaquetando notification-service..."
+            cd notification-service && ./mvnw package -DskipTests && cd ..
+          fi
+
       # ========================================================
-      # DESPLIEGUE EFÍMERO Y TÚNEL CONECTADO A NEON (5 MINUTOS)
+      # DESPLIEGUE EFÍMERO DEL CLÚSTER COMPLETO (5 MINUTOS)
       # ========================================================
-      - name: Iniciar servicio conectado a Neon y exponer URL pública
+      - name: Iniciar los 4 microservicios y exponer Swagger UI
         env:
           DB_JDBC_URL: ${{ secrets.DB_JDBC_URL }}
           DB_USERNAME: ${{ secrets.DB_USERNAME }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
-          echo "=== 1. Instalando Cloudflare Tunnel ==="
+          echo "=== Instalando Cloudflare Tunnel ==="
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared.deb
 
-          echo "=== 2. Localizando binario Fast-JAR ==="
-          JAR_PATH=$(find . -name "quarkus-run.jar" | head -n 1)
-          if [ -z "$JAR_PATH" ]; then
-            echo "Error: No se encontró quarkus-run.jar"
-            exit 1
+          echo "=== Arrancando los 4 microservicios en background ==="
+
+          # 1. Arrancar account-service (8081)
+          ACC_JAR=$(find ./account-service -name "quarkus-run.jar" 2>/dev/null | head -n 1)
+          if [ -n "$ACC_JAR" ]; then
+            echo "Levantando account-service (8081)..."
+            java \
+              -Dquarkus.http.port=8081 \
+              -Dquarkus.datasource.jdbc.url="$DB_JDBC_URL" \
+              -Dquarkus.datasource.username="$DB_USERNAME" \
+              -Dquarkus.datasource.password="$DB_PASSWORD" \
+              -Dquarkus.hibernate-orm.database.generation=none \
+              -jar "$ACC_JAR" > account.log 2>&1 &
+            PID_ACC=$!
           fi
 
-          echo "Iniciando servicio conectado a Neon PostgreSQL..."
+          # 2. Arrancar payment-service (8082)
+          PAY_JAR=$(find ./payment-service -name "quarkus-run.jar" 2>/dev/null | head -n 1)
+          if [ -n "$PAY_JAR" ]; then
+            echo "Levantando payment-service (8082)..."
+            java \
+              -Dquarkus.http.port=8082 \
+              -Dquarkus.datasource.jdbc.url="$DB_JDBC_URL" \
+              -Dquarkus.datasource.username="$DB_USERNAME" \
+              -Dquarkus.datasource.password="$DB_PASSWORD" \
+              -Dquarkus.hibernate-orm.database.generation=none \
+              -jar "$PAY_JAR" > payment.log 2>&1 &
+            PID_PAY=$!
+          fi
+
+          # 3. Arrancar notification-service (8083)
+          NOT_JAR=$(find ./notification-service -name "quarkus-run.jar" 2>/dev/null | head -n 1)
+          if [ -n "$NOT_JAR" ]; then
+            echo "Levantando notification-service (8083)..."
+            java \
+              -Dquarkus.http.port=8083 \
+              -jar "$NOT_JAR" > notification.log 2>&1 &
+            PID_NOT=$!
+          fi
+
+          # 4. Arrancar saga-orchestrator (8080)
+          ORCH_JAR=$(find . -name "quarkus-run.jar" | grep -v "account-service" | grep -v "payment-service" | grep -v "notification-service" | head -n 1)
+          if [ -z "$ORCH_JAR" ]; then
+            ORCH_JAR=$(find . -name "quarkus-run.jar" | head -n 1)
+          fi
+
+          echo "Levantando saga-orchestrator (8080)..."
           java \
             -Dquarkus.http.host=0.0.0.0 \
             -Dquarkus.http.port=8080 \
@@ -74,18 +136,19 @@ jobs:
             -Dquarkus.datasource.username="$DB_USERNAME" \
             -Dquarkus.datasource.password="$DB_PASSWORD" \
             -Dquarkus.hibernate-orm.database.generation=none \
-            -jar "$JAR_PATH" > app.log 2>&1 &
-          APP_PID=$!
+            -jar "$ORCH_JAR" > orchestrator.log 2>&1 &
+          PID_ORCH=$!
 
-          echo "Esperando que el servicio termine el arranque con Neon..."
-          sleep 12
+          echo "Esperando sincronización de sockets (15s)..."
+          sleep 15
 
-          echo "Verificando log de arranque:"
-          cat app.log | head -n 35
+          echo "=== Health Checks Locales ==="
+          curl -sI http://localhost:8081/accounts | head -n 1 || echo "account-service pendiente"
+          curl -sI http://localhost:8080/q/openapi | head -n 1 || echo "orchestrator pendiente"
 
-          echo "=== 3. Iniciando túnel hacia el puerto 8080 ==="
+          echo "=== Levantando túnel Cloudflare hacia puerto 8080 ==="
           cloudflared tunnel --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
-          TUNNEL_PID=$!
+          PID_TUNNEL=$!
 
           sleep 8
 
@@ -93,7 +156,7 @@ jobs:
 
           echo ""
           echo "=========================================================================="
-          echo " ¡URL PÚBLICA CONECTADA A NEON ACTIVA POR 5 MINUTOS! "
+          echo " ¡CLÚSTER COMPLETO ACTIVO POR 5 MINUTOS (4 MICROSERVICIOS CONECTADOS)! "
           echo " URL Base:    $TUNNEL_URL"
           echo " Swagger UI:  $TUNNEL_URL/q/swagger-ui/"
           echo " OpenAPI Doc: $TUNNEL_URL/q/openapi"
@@ -102,6 +165,6 @@ jobs:
 
           sleep 300
 
-          echo "Tiempo cumplido (5 min). Apagando procesos..."
-          kill -9 $TUNNEL_PID $APP_PID || true
-          echo "Entorno temporal finalizado."
+          echo "Tiempo cumplido (5 min). Apagando todos los microservicios..."
+          kill -9 $PID_TUNNEL $PID_ORCH $PID_ACC $PID_PAY $PID_NOT 2>/dev/null || true
+          echo "Clúster temporal apagado correctamente."
