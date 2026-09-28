@@ -11,6 +11,22 @@ jobs:
     name: "Build, Test & Ephemeral Public Run"
     runs-on: ubuntu-latest
 
+    # Servicio nativo de PostgreSQL en el runner de GitHub Actions
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: saga_db
+          POSTGRES_USER: saga_user
+          POSTGRES_PASSWORD: saga_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout del código
         uses: actions/checkout@v4
@@ -29,25 +45,22 @@ jobs:
 
       - name: Ejecutar pruebas unitarias (Unit Tests)
         run: |
-          echo "=== Ejecutando pruebas unitarias con Java 25 ==="
+          echo "=== Ejecutando pruebas unitarias ==="
           if [ -d "saga-orchestrator" ]; then
             cd saga-orchestrator && ./mvnw test && cd ..
           else
             ./mvnw test
           fi
 
-      - name: Empaquetar aplicación (Fast-JAR)
+      - name: Empaquetar aplicación (Fast-JAR) con Swagger habilitado
         run: |
           echo "=== Empaquetando aplicación ==="
           if [ -d "saga-orchestrator" ]; then
-            cd saga-orchestrator && ./mvnw package -DskipTests && cd ..
+            cd saga-orchestrator && ./mvnw package -DskipTests -Dquarkus.swagger-ui.always-include=true && cd ..
           else
-            ./mvnw package -DskipTests
+            ./mvnw package -DskipTests -Dquarkus.swagger-ui.always-include=true
           fi
 
-      # ========================================================
-      # DESPLIEGUE EFÍMERO Y TÚNEL PÚBLICO (5 MINUTOS)
-      # ========================================================
       - name: Iniciar servicio y exponer URL pública temporal
         run: |
           echo "=== 1. Instalando Cloudflare Tunnel ==="
@@ -61,21 +74,22 @@ jobs:
             exit 1
           fi
 
-          echo "Iniciando servicio con H2 y Swagger UI habilitado..."
+          echo "Iniciando servicio conectado al PostgreSQL local de Actions..."
           java \
             -Dquarkus.http.host=0.0.0.0 \
             -Dquarkus.http.port=8080 \
             -Dquarkus.swagger-ui.always-include=true \
-            -Dquarkus.datasource.db-kind=h2 \
-            -Dquarkus.datasource.jdbc.url="jdbc:h2:mem:saga_ephemeral;DB_CLOSE_DELAY=-1" \
+            -Dquarkus.datasource.jdbc.url="jdbc:postgresql://localhost:5432/saga_db" \
+            -Dquarkus.datasource.username="saga_user" \
+            -Dquarkus.datasource.password="saga_password" \
             -Dquarkus.hibernate-orm.database.generation=drop-and-create \
             -jar "$JAR_PATH" > app.log 2>&1 &
           APP_PID=$!
 
-          echo "Esperando que el servicio arranque..."
+          echo "Esperando que el servicio termine el arranque..."
           sleep 12
 
-          echo "Verificando log de arranque de la aplicación:"
+          echo "Verificando log de arranque de Quarkus:"
           cat app.log | head -n 35
 
           echo "=== 3. Iniciando túnel hacia el puerto 8080 ==="
