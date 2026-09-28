@@ -61,34 +61,42 @@ jobs:
             exit 1
           fi
 
-          echo "Iniciando servicio Quarkus en background..."
-          java -jar "$JAR_PATH" > app.log 2>&1 &
+          echo "Iniciando servicio con H2 y Swagger UI habilitado..."
+          java \
+            -Dquarkus.http.host=0.0.0.0 \
+            -Dquarkus.http.port=8080 \
+            -Dquarkus.swagger-ui.always-include=true \
+            -Dquarkus.datasource.db-kind=h2 \
+            -Dquarkus.datasource.jdbc.url="jdbc:h2:mem:saga_ephemeral;DB_CLOSE_DELAY=-1" \
+            -Dquarkus.hibernate-orm.database.generation=drop-and-create \
+            -jar "$JAR_PATH" > app.log 2>&1 &
           APP_PID=$!
 
-          echo "Esperando que el puerto 8080 esté listo..."
+          echo "Esperando que el servicio arranque..."
           sleep 12
 
+          echo "Verificando log de arranque de la aplicación:"
+          cat app.log | head -n 35
+
           echo "=== 3. Iniciando túnel hacia el puerto 8080 ==="
-          cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
+          cloudflared tunnel --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
           TUNNEL_PID=$!
 
           sleep 8
 
-          # Extraer la URL pública generada de los logs
           TUNNEL_URL=$(grep -o 'https://[-0-9a-z]*\.trycloudflare\.com' tunnel.log | head -n 1)
 
           echo ""
           echo "=========================================================================="
           echo " ¡URL PÚBLICA TEMPORAL ACTIVA POR 5 MINUTOS! "
           echo " URL Base:    $TUNNEL_URL"
-          echo " Swagger UI:  $TUNNEL_URL/q/swagger-ui"
+          echo " Swagger UI:  $TUNNEL_URL/q/swagger-ui/"
           echo " OpenAPI Doc: $TUNNEL_URL/q/openapi"
           echo "=========================================================================="
           echo ""
 
-          # Mantener la máquina y el túnel vivos durante 5 minutos
           sleep 300
 
-          echo "Tiempo de 5 minutos cumplido. Destruyendo procesos..."
+          echo "Tiempo cumplido (5 min). Apagando procesos..."
           kill -9 $TUNNEL_PID $APP_PID || true
           echo "Entorno temporal finalizado."
