@@ -1,0 +1,15 @@
+meta {
+  name: 05. Consultar Auditoría de Transacciones
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{orchestrator_url}}/api/audits
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}

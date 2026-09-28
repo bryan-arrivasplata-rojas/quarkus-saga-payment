@@ -1,0 +1,25 @@
+{
+  "name": "Quarkus Distributed Saga",
+  "forwardPorts": [8080, 8081, 8082, 8083],
+  "portsAttributes": {
+    "8080": {
+      "label": "Saga Orchestrator (Swagger UI)",
+      "onAutoForward": "openBrowser"
+    },
+    "8081": {
+      "label": "Account Service",
+      "onAutoForward": "silent"
+    },
+    "8082": {
+      "label": "Payment Service",
+      "onAutoForward": "silent"
+    },
+    "8083": {
+      "label": "Notification Service",
+      "onAutoForward": "silent"
+    }
+  },
+  "containerEnv": {
+    "MAVEN_OPTS": "-Ddebug=false"
+  }
+}

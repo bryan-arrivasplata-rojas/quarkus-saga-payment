@@ -1,0 +1,21 @@
+meta {
+  name: Emisión Directa de Comprobante
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{notification_url}}/notifications/issue-receipt
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "sagaId": "test-uuid-directo",
+    "fromAccountId": 1,
+    "toAccountId": 2,
+    "amount": 25.00,
+    "simulateFailure": false
+  }
+}

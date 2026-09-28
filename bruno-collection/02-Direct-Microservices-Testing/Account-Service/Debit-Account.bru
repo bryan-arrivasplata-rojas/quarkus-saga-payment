@@ -1,0 +1,17 @@
+meta {
+  name: Débito Directo de Cuenta
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{account_url}}/accounts/1/debit
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "amount": 25.00
+  }
+}

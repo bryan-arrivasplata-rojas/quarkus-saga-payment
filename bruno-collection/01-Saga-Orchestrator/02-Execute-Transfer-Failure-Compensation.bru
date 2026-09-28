@@ -1,0 +1,25 @@
+meta {
+  name: 02. Ejecutar Transferencia con Fallo (Rollback LIFO)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{orchestrator_url}}/api/transfers
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "fromAccountId": 1,
+    "toAccountId": 2,
+    "amount": 50.00,
+    "simulateNotificationFailure": true
+  }
+}
+
+assert {
+  res.status: eq 409
+  res.body.status: eq FAILED_AND_COMPENSATED
+}

@@ -1,0 +1,17 @@
+meta {
+  name: Revertir Crédito Directo
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{payment_url}}/payments/2/revert-credit
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "amount": 25.00
+  }
+}

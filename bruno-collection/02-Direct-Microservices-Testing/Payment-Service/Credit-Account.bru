@@ -1,0 +1,17 @@
+meta {
+  name: Crédito Directo a Cuenta
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{payment_url}}/payments/2/credit
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "amount": 25.00
+  }
+}

@@ -1,0 +1,15 @@
+meta {
+  name: Anulación Directa de Comprobante
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{notification_url}}/notifications/cancel-receipt/test-uuid-directo
+  body: none
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}

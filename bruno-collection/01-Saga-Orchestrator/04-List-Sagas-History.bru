@@ -1,0 +1,15 @@
+meta {
+  name: 04. Consultar Historial de Sagas
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{orchestrator_url}}/api/sagas
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}

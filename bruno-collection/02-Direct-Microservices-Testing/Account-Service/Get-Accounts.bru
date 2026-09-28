@@ -1,0 +1,15 @@
+meta {
+  name: Listar Cuentas Directo
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{account_url}}/accounts
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}

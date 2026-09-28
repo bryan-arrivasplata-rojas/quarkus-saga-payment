@@ -1,0 +1,17 @@
+meta {
+  name: Revertir Débito Directo
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{account_url}}/accounts/1/revert-debit
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "amount": 25.00
+  }
+}
