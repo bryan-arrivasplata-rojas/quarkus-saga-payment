@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-test-and-run:
-    name: "Build, Test & Ephemeral Run"
+    name: "Build, Test & Ephemeral Public Run"
     runs-on: ubuntu-latest
 
     steps:
@@ -45,31 +45,50 @@ jobs:
             ./mvnw package -DskipTests
           fi
 
-      - name: Iniciar servicio y mantener activo por 5 minutos
+      # ========================================================
+      # DESPLIEGUE EFÍMERO Y TÚNEL PÚBLICO (5 MINUTOS)
+      # ========================================================
+      - name: Iniciar servicio y exponer URL pública temporal
         run: |
-          echo "=== Localizando binario Fast-JAR ==="
+          echo "=== 1. Instalando Cloudflare Tunnel ==="
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+
+          echo "=== 2. Localizando binario Fast-JAR ==="
           JAR_PATH=$(find . -name "quarkus-run.jar" | head -n 1)
-          
           if [ -z "$JAR_PATH" ]; then
             echo "Error: No se encontró quarkus-run.jar"
             exit 1
           fi
 
-          echo "Iniciando servicio desde: $JAR_PATH"
+          echo "Iniciando servicio Quarkus en background..."
           java -jar "$JAR_PATH" > app.log 2>&1 &
           APP_PID=$!
 
-          echo "Esperando inicio del servicio..."
+          echo "Esperando que el puerto 8080 esté listo..."
           sleep 12
 
-          echo "Verificando endpoints locales:"
-          curl -sI http://localhost:8080/q/openapi || true
+          echo "=== 3. Iniciando túnel hacia el puerto 8080 ==="
+          cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
+          TUNNEL_PID=$!
 
-          echo "=========================================================="
-          echo "Servicio activo. Manteniendo encendido por 5 minutos..."
-          echo "=========================================================="
+          sleep 8
+
+          # Extraer la URL pública generada de los logs
+          TUNNEL_URL=$(grep -o 'https://[-0-9a-z]*\.trycloudflare\.com' tunnel.log | head -n 1)
+
+          echo ""
+          echo "=========================================================================="
+          echo " ¡URL PÚBLICA TEMPORAL ACTIVA POR 5 MINUTOS! "
+          echo " URL Base:    $TUNNEL_URL"
+          echo " Swagger UI:  $TUNNEL_URL/q/swagger-ui"
+          echo " OpenAPI Doc: $TUNNEL_URL/q/openapi"
+          echo "=========================================================================="
+          echo ""
+
+          # Mantener la máquina y el túnel vivos durante 5 minutos
           sleep 300
 
-          echo "Tiempo cumplido (5 min). Apagando proceso..."
-          kill -9 $APP_PID || true
-          echo "Proceso finalizado exitosamente."
+          echo "Tiempo de 5 minutos cumplido. Destruyendo procesos..."
+          kill -9 $TUNNEL_PID $APP_PID || true
+          echo "Entorno temporal finalizado."

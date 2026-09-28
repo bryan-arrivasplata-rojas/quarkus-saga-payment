@@ -103,7 +103,7 @@ La documentación interactiva OpenAPI/Swagger se encuentra activa en el microser
   https://crispy-guacamole-9g655v7rpx9hx775-8080.app.github.dev/q/swagger-ui
 * URL en Localhost:
   http://localhost:8080/q/swagger-ui
-* Especificación OpenAPI (JSON):
+* Especificación OpenAPI en GitHub Codespaces (JSON):
   https://crispy-guacamole-9g655v7rpx9hx775-8080.app.github.dev/q/openapi
 
 ### Catálogo de Rutas (saga-orchestrator)
@@ -230,19 +230,19 @@ El archivo .github/workflows/ci-cd.yml automatiza la integración continua y el 
 ### Puesta en Marcha de los Microservicios
 Para probar el flujo distribuido de forma local, abre cuatro pestañas de terminal y ejecuta los comandos correspondientes:
 
-# Terminal 1: Account Service (Puerto 8081)
+#### Terminal 1: Account Service (Puerto 8081)
 cd account-service
 ./mvnw quarkus:dev
 
-# Terminal 2: Payment Service (Puerto 8082)
+#### Terminal 2: Payment Service (Puerto 8082)
 cd payment-service
 ./mvnw quarkus:dev
 
-# Terminal 3: Notification Service (Puerto 8083)
+#### Terminal 3: Notification Service (Puerto 8083)
 cd notification-service
 ./mvnw quarkus:dev
 
-# Terminal 4: Saga Orchestrator (Puerto 8080)
+#### Terminal 4: Saga Orchestrator (Puerto 8080)
 cd saga-orchestrator
 ./mvnw quarkus:dev
 
