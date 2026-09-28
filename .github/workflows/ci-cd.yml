@@ -11,22 +11,6 @@ jobs:
     name: "Build, Test & Ephemeral Public Run"
     runs-on: ubuntu-latest
 
-    # Servicio nativo de PostgreSQL en el runner de GitHub Actions
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: saga_db
-          POSTGRES_USER: saga_user
-          POSTGRES_PASSWORD: saga_password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - name: Checkout del código
         uses: actions/checkout@v4
@@ -43,7 +27,7 @@ jobs:
           chmod +x ./mvnw || true
           if [ -f "./saga-orchestrator/mvnw" ]; then chmod +x ./saga-orchestrator/mvnw; fi
 
-      - name: Ejecutar pruebas unitarias (Unit Tests)
+      - name: Ejecutar pruebas unitarias (Unit Tests con H2 aislado)
         run: |
           echo "=== Ejecutando pruebas unitarias ==="
           if [ -d "saga-orchestrator" ]; then
@@ -61,7 +45,14 @@ jobs:
             ./mvnw package -DskipTests -Dquarkus.swagger-ui.always-include=true
           fi
 
-      - name: Iniciar servicio y exponer URL pública temporal
+      # ========================================================
+      # DESPLIEGUE EFÍMERO Y TÚNEL CONECTADO A NEON (5 MINUTOS)
+      # ========================================================
+      - name: Iniciar servicio conectado a Neon y exponer URL pública
+        env:
+          DB_JDBC_URL: ${{ secrets.DB_JDBC_URL }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
           echo "=== 1. Instalando Cloudflare Tunnel ==="
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
@@ -74,22 +65,22 @@ jobs:
             exit 1
           fi
 
-          echo "Iniciando servicio conectado al PostgreSQL local de Actions..."
+          echo "Iniciando servicio conectado a Neon PostgreSQL..."
           java \
             -Dquarkus.http.host=0.0.0.0 \
             -Dquarkus.http.port=8080 \
             -Dquarkus.swagger-ui.always-include=true \
-            -Dquarkus.datasource.jdbc.url="jdbc:postgresql://localhost:5432/saga_db" \
-            -Dquarkus.datasource.username="saga_user" \
-            -Dquarkus.datasource.password="saga_password" \
-            -Dquarkus.hibernate-orm.database.generation=drop-and-create \
+            -Dquarkus.datasource.jdbc.url="$DB_JDBC_URL" \
+            -Dquarkus.datasource.username="$DB_USERNAME" \
+            -Dquarkus.datasource.password="$DB_PASSWORD" \
+            -Dquarkus.hibernate-orm.database.generation=none \
             -jar "$JAR_PATH" > app.log 2>&1 &
           APP_PID=$!
 
-          echo "Esperando que el servicio termine el arranque..."
+          echo "Esperando que el servicio termine el arranque con Neon..."
           sleep 12
 
-          echo "Verificando log de arranque de Quarkus:"
+          echo "Verificando log de arranque:"
           cat app.log | head -n 35
 
           echo "=== 3. Iniciando túnel hacia el puerto 8080 ==="
@@ -102,7 +93,7 @@ jobs:
 
           echo ""
           echo "=========================================================================="
-          echo " ¡URL PÚBLICA TEMPORAL ACTIVA POR 5 MINUTOS! "
+          echo " ¡URL PÚBLICA CONECTADA A NEON ACTIVA POR 5 MINUTOS! "
           echo " URL Base:    $TUNNEL_URL"
           echo " Swagger UI:  $TUNNEL_URL/q/swagger-ui/"
           echo " OpenAPI Doc: $TUNNEL_URL/q/openapi"
